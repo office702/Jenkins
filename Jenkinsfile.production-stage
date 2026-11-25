@@ -1,0 +1,99 @@
+pipeline {
+    agent { label 'audio-mac-docker' }
+
+    options {
+        skipDefaultCheckout(true)
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '25'))
+        timeout(time: 35, unit: 'MINUTES')
+    }
+
+    stages {
+        stage('Copy and verify approved package #8') {
+            steps {
+                deleteDir()
+                copyArtifacts projectName: '/packaging/audioTranslation',
+                    selector: specific('8'),
+                    filter: 'artifacts/docker/*.tar.gz,artifacts/docker/*.tar.gz.sha256,artifacts/docker/build.json',
+                    fingerprintArtifacts: false
+            }
+        }
+        stage('Upload and run isolated production preflight') {
+            steps {
+                withCredentials([sshUserPrivateKey(credentialsId: 'audioTranslation-production-stage',
+                    keyFileVariable: 'STAGE_KEY', usernameVariable: 'STAGE_USER')]) {
+                    sh '''#!/bin/bash
+set +x
+set -euo pipefail
+bundle="$WORKSPACE/artifacts/docker"
+known_hosts="$HOME/Library/Application Support/Jenkins/production-stage/known_hosts"
+host_key_setting='UserKnownHostsFile="'"$known_hosts"'"'
+metadata=$(/usr/bin/python3 - "$bundle" <<'PY'
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+manifest = json.loads((root / "build.json").read_text(encoding="utf-8"))
+assert manifest["git_commit"] == "f3d8b66c21b20461b9ac99507b73104ca4f81700"
+assert manifest["platform"] == "linux/amd64"
+tag = "amd64-f3d8b66c21b2-b8"
+assert manifest["image"] == "audio-translation-prod:" + tag
+assert manifest["artifact"] == "audio-translation-prod-" + tag + ".tar.gz"
+assert re.fullmatch(r"sha256:[0-9a-f]{64}", manifest["image_id"])
+assert re.fullmatch(r"[0-9a-f]{64}", manifest["sha256"])
+archive = root / manifest["artifact"]
+assert archive.stat().st_size == manifest["bytes"]
+assert archive.with_name(archive.name + ".sha256").read_text().split() == [manifest["sha256"], archive.name]
+checksum = hashlib.sha256()
+with archive.open("rb") as file:
+    for chunk in iter(lambda: file.read(1024 * 1024), b""):
+        checksum.update(chunk)
+assert checksum.hexdigest() == manifest["sha256"]
+print(tag, manifest["sha256"], archive.name, manifest["bytes"], manifest["image_id"])
+PY
+)
+read -r tag sha archive bytes image_id <<< "$metadata"
+printf 'Archive #8 verified locally: %s (%s bytes), SHA-256 %s\\n' "$archive" "$bytes" "$sha"
+/usr/bin/ssh -F /dev/null -T -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+    -o "$host_key_setting" -o GlobalKnownHostsFile=/dev/null \
+    -o ConnectTimeout=12 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+    -i "$STAGE_KEY" "$STAGE_USER@43.136.77.153" "stage-verified $tag $sha" \
+    < "$bundle/$archive" > staged-server.json
+/usr/bin/curl --noproxy '*' --fail --silent --show-error --max-time 12 \
+    'https://43.136.77.153/api/health' > public-health.json
+/usr/bin/python3 - "$tag" "$sha" "$bytes" "$image_id" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+tag, sha, size, image_id = sys.argv[1:]
+stage = json.loads(Path("staged-server.json").read_text(encoding="utf-8"))
+assert stage["tag"] == tag and stage["sha256"] == sha and stage["bytes"] == int(size)
+assert stage["image_id"] == image_id and stage["preflight"] == "passed"
+assert stage["preflight_removed"] and stage["live_unchanged"]
+health = json.loads(Path("public-health.json").read_text(encoding="utf-8"))
+assert health["status"] == "ok"
+stage["public_health"] = health["status"]
+stage["jenkins_build_url"] = os.environ["BUILD_URL"]
+stage["package_build"] = 8
+stage["git_commit"] = "f3d8b66c21b20461b9ac99507b73104ca4f81700"
+Path("staging-receipt.json").write_text(json.dumps(stage, indent=2) + "\\n", encoding="utf-8")
+print("Production staging passed; live image:", stage["live_image"])
+PY
+'''
+                }
+                archiveArtifacts artifacts: 'staging-receipt.json', fingerprint: true
+            }
+        }
+    }
+
+    post {
+        cleanup {
+            deleteDir()
+        }
+    }
+}

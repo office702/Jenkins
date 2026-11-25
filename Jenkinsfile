@@ -4,7 +4,7 @@ pipeline {
     options {
         skipDefaultCheckout(true)
         disableConcurrentBuilds()
-        copyArtifactPermission('audioTranslation-test')
+        copyArtifactPermission('audioTranslation-test,../production/audioTranslation-stage,../production/audioTranslation-release')
         buildDiscarder(logRotator(numToKeepStr: '25', artifactNumToKeepStr: '3'))
         timeout(time: 75, unit: 'MINUTES')
     }
