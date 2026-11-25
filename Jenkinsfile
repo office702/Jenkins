@@ -11,7 +11,7 @@ pipeline {
 
     environment {
         SOURCE_URL = 'https://github.com/office702/audioTranslation.git'
-        SOURCE_BRANCH = 'migration/tencent-r5'
+        SOURCE_BRANCH = 'main'
         GIT_TERMINAL_PROMPT = '0'
         GIT_CONFIG_COUNT = '0'
         WIN_GIT = 'C:/Users/Administrator/AppData/Local/UGit/app-5.55.1/resources/app/git/cmd/git.exe'
@@ -105,6 +105,7 @@ print("Verified linux/amd64, frontend, source commit and", ffmpeg)
 docker save "$image" | gzip -1 > "$output/$archive"
 gzip -t "$output/$archive"
 cp docker-source/server/container/build-info.json "$output/source-build-info.json"
+cp docker-source/server/container/compose.yaml docker-source/server/container/gateway.conf "$output/"
 image_id=$(docker image inspect --format '{{.Id}}' "$image")
 (
     cd "$output"

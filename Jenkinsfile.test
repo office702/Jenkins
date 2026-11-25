@@ -16,7 +16,7 @@ pipeline {
                     env.TEST_REQUESTED_BY = buildCause?.userId ?: 'automation'
                     def packages = build job: '/packaging/audioTranslation', wait: true, propagate: true
                     env.PACKAGE_BUILD_NUMBER = packages.number.toString()
-                    currentBuild.description = 'Mac mini test server - package #' + env.PACKAGE_BUILD_NUMBER
+                    currentBuild.description = 'Mac mini 8020 test server - package #' + env.PACKAGE_BUILD_NUMBER
                 }
             }
         }
@@ -26,11 +26,11 @@ pipeline {
                 deleteDir()
                 copyArtifacts projectName: '/packaging/audioTranslation',
                     selector: specific(env.PACKAGE_BUILD_NUMBER),
-                    filter: 'artifacts/docker/*.tar.gz,artifacts/docker/*.tar.gz.sha256,artifacts/docker/build.json',
+                    filter: 'artifacts/docker/*.tar.gz,artifacts/docker/*.tar.gz.sha256,artifacts/docker/build.json,artifacts/docker/source-build-info.json,artifacts/docker/compose.yaml,artifacts/docker/gateway.conf',
                     fingerprintArtifacts: false
                 sh '''#!/bin/bash
 set -euo pipefail
-deploy="$HOME/Library/Application Support/Jenkins/audio-translation-test/deploy-test.sh"
+deploy="$HOME/Library/Application Support/Jenkins/audio-test-server/deploy-8020.sh"
 bash "$deploy" "$WORKSPACE/artifacts/docker" "$WORKSPACE/deployment.json"
 '''
                 archiveArtifacts artifacts: 'deployment.json', fingerprint: true
