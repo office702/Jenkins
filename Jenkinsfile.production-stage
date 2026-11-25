@@ -8,12 +8,24 @@ pipeline {
         timeout(time: 35, unit: 'MINUTES')
     }
 
+    parameters {
+        string(name: 'PACKAGE_BUILD', defaultValue: '', trim: true,
+               description: 'Shared package build number to stage, normally the one the 8020 test server verified.')
+    }
+
     stages {
-        stage('Copy and verify approved package #8') {
+        stage('Copy and verify approved package') {
             steps {
+                script {
+                    if (!(params.PACKAGE_BUILD ==~ /[1-9][0-9]*/)) {
+                        error('Enter the shared package build number to stage.')
+                    }
+                    env.PACKAGE_BUILD_NUMBER = params.PACKAGE_BUILD
+                    currentBuild.description = 'Production staging of package #' + env.PACKAGE_BUILD_NUMBER
+                }
                 deleteDir()
                 copyArtifacts projectName: '/packaging/audioTranslation',
-                    selector: specific('8'),
+                    selector: specific(env.PACKAGE_BUILD_NUMBER),
                     filter: 'artifacts/docker/*.tar.gz,artifacts/docker/*.tar.gz.sha256,artifacts/docker/build.json',
                     fingerprintArtifacts: false
             }
@@ -28,18 +40,20 @@ set -euo pipefail
 bundle="$WORKSPACE/artifacts/docker"
 known_hosts="$HOME/Library/Application Support/Jenkins/production-stage/known_hosts"
 host_key_setting='UserKnownHostsFile="'"$known_hosts"'"'
-metadata=$(/usr/bin/python3 - "$bundle" <<'PY'
+metadata=$(/usr/bin/python3 - "$bundle" "$PACKAGE_BUILD_NUMBER" <<'PY'
 import hashlib
 import json
 import re
 import sys
 from pathlib import Path
 
-root = Path(sys.argv[1])
+root, number = Path(sys.argv[1]), sys.argv[2]
 manifest = json.loads((root / "build.json").read_text(encoding="utf-8"))
-assert manifest["git_commit"] == "f3d8b66c21b20461b9ac99507b73104ca4f81700"
+commit = manifest["git_commit"]
+assert re.fullmatch(r"[0-9a-f]{40}", commit), commit
+assert re.fullmatch(r"[1-9][0-9]*", number), number
 assert manifest["platform"] == "linux/amd64"
-tag = "amd64-f3d8b66c21b2-b8"
+tag = f"amd64-{commit[:12]}-b{number}"
 assert manifest["image"] == "audio-translation-prod:" + tag
 assert manifest["artifact"] == "audio-translation-prod-" + tag + ".tar.gz"
 assert re.fullmatch(r"sha256:[0-9a-f]{64}", manifest["image_id"])
@@ -52,11 +66,11 @@ with archive.open("rb") as file:
     for chunk in iter(lambda: file.read(1024 * 1024), b""):
         checksum.update(chunk)
 assert checksum.hexdigest() == manifest["sha256"]
-print(tag, manifest["sha256"], archive.name, manifest["bytes"], manifest["image_id"])
+print(tag, manifest["sha256"], archive.name, manifest["bytes"], manifest["image_id"], commit)
 PY
 )
-read -r tag sha archive bytes image_id <<< "$metadata"
-printf 'Archive #8 verified locally: %s (%s bytes), SHA-256 %s\\n' "$archive" "$bytes" "$sha"
+read -r tag sha archive bytes image_id commit <<< "$metadata"
+printf 'Archive #%s verified locally: %s (%s bytes), SHA-256 %s\\n' "$PACKAGE_BUILD_NUMBER" "$archive" "$bytes" "$sha"
 /usr/bin/ssh -F /dev/null -T -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
     -o "$host_key_setting" -o GlobalKnownHostsFile=/dev/null \
     -o ConnectTimeout=12 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
@@ -64,13 +78,13 @@ printf 'Archive #8 verified locally: %s (%s bytes), SHA-256 %s\\n' "$archive" "$
     < "$bundle/$archive" > staged-server.json
 /usr/bin/curl --noproxy '*' --fail --silent --show-error --max-time 12 \
     'https://43.136.77.153/api/health' > public-health.json
-/usr/bin/python3 - "$tag" "$sha" "$bytes" "$image_id" <<'PY'
+/usr/bin/python3 - "$tag" "$sha" "$bytes" "$image_id" "$commit" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
 
-tag, sha, size, image_id = sys.argv[1:]
+tag, sha, size, image_id, commit = sys.argv[1:]
 stage = json.loads(Path("staged-server.json").read_text(encoding="utf-8"))
 assert stage["tag"] == tag and stage["sha256"] == sha and stage["bytes"] == int(size)
 assert stage["image_id"] == image_id and stage["preflight"] == "passed"
@@ -79,8 +93,8 @@ health = json.loads(Path("public-health.json").read_text(encoding="utf-8"))
 assert health["status"] == "ok"
 stage["public_health"] = health["status"]
 stage["jenkins_build_url"] = os.environ["BUILD_URL"]
-stage["package_build"] = 8
-stage["git_commit"] = "f3d8b66c21b20461b9ac99507b73104ca4f81700"
+stage["package_build"] = int(os.environ["PACKAGE_BUILD_NUMBER"])
+stage["git_commit"] = commit
 Path("staging-receipt.json").write_text(json.dumps(stage, indent=2) + "\\n", encoding="utf-8")
 print("Production staging passed; live image:", stage["live_image"])
 PY
