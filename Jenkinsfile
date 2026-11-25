@@ -1,3 +1,30 @@
+def findRequester(run) {
+    def userCause = run.getBuildCauses().find { it.userId }
+    if (userCause) {
+        return userCause.userId
+    }
+    for (def upstream in run.getUpstreamBuilds()) {
+        def requester = findRequester(upstream)
+        if (requester) {
+            return requester
+        }
+    }
+    return null
+}
+
+def notifyPackaging(String status) {
+    catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS', catchInterruptions: false,
+               message: 'Could not queue the WeCom packaging notification.') {
+        build job: '/audioTranslation-wecom-notify', wait: false, quietPeriod: 0, parameters: [
+            string(name: 'EVENT', value: 'package_' + status),
+            string(name: 'REPORT_BUILD', value: env.BUILD_NUMBER),
+            string(name: 'REPORT_URL', value: env.BUILD_URL ?: ''),
+            string(name: 'REQUESTED_BY', value: env.PACKAGE_REQUESTED_BY ?: 'automation'),
+            string(name: 'SOURCE_COMMIT', value: env.PACKAGE_COMMIT ?: '')
+        ]
+    }
+}
+
 pipeline {
     agent none
 
@@ -22,6 +49,18 @@ pipeline {
     }
 
     stages {
+        stage('Notify packaging start') {
+            steps {
+                script {
+                    env.PACKAGE_REQUESTED_BY = 'automation'
+                    catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS', catchInterruptions: false,
+                               message: 'Could not resolve the packaging requester.') {
+                        env.PACKAGE_REQUESTED_BY = findRequester(currentBuild) ?: 'automation'
+                    }
+                    notifyPackaging('STARTED')
+                }
+            }
+        }
         stage('Fetch source') {
             agent { label 'audio-windows' }
             steps {
@@ -39,8 +78,6 @@ pipeline {
                     if (!(env.PACKAGE_COMMIT ==~ /[a-f0-9]{40}/)) {
                         error('The checkout did not return a valid Git commit.')
                     }
-                    def userCause = currentBuild.getBuildCauses().find { it.userId }
-                    env.PACKAGE_REQUESTED_BY = userCause?.userId ?: 'automation'
                     currentBuild.description = env.SOURCE_BRANCH + ' @ ' + env.PACKAGE_COMMIT.take(12)
                 }
                 powershell '''
@@ -205,6 +242,13 @@ PY
                         }
                     }
                 }
+            }
+        }
+    }
+    post {
+        cleanup {
+            script {
+                notifyPackaging(currentBuild.currentResult)
             }
         }
     }

@@ -1,0 +1,68 @@
+pipeline {
+    agent none
+
+    options {
+        skipDefaultCheckout(true)
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '25'))
+    }
+
+    parameters {
+        string(name: 'EVENT')
+        string(name: 'REPORT_BUILD')
+        string(name: 'REPORT_URL')
+        string(name: 'REQUESTED_BY')
+        string(name: 'PACKAGE_BUILD')
+        string(name: 'SOURCE_COMMIT')
+    }
+
+    stages {
+        stage('Send WeCom notification') {
+            agent { label 'audio-mac-docker' }
+            options {
+                timeout(time: 15, unit: 'MINUTES')
+            }
+            steps {
+                sh '''#!/bin/bash
+set -euo pipefail
+socket="$HOME/Library/Application Support/Jenkins/wecom-notify/notify.sock"
+/usr/bin/python3 - <<'PY' | /usr/bin/curl --fail --silent --show-error --max-time 15 \\
+    --unix-socket "$socket" --data-binary @- http://localhost/notify
+import os
+import re
+
+env = os.environ
+titles = {
+    "package_STARTED": "打包开始",
+    "package_SUCCESS": "打包成功，产物已归档",
+    "package_FAILURE": "打包失败",
+    "package_UNSTABLE": "打包有异常",
+    "package_ABORTED": "打包已中止",
+    "production_SUCCESS": "正式服已上线，HTTPS 验收通过",
+    "production_FAILURE": "正式服发布失败",
+    "production_UNSTABLE": "正式服发布有异常",
+    "production_ABORTED": "正式服发布已中止",
+}
+title = titles[env["EVENT"]]
+number = env["REPORT_BUILD"]
+assert re.fullmatch(r"[1-9][0-9]*", number)
+requester = re.sub(r"[^\\w@. -]", "", env.get("REQUESTED_BY", ""))[:80] or "automation"
+if requester == "automation":
+    requester = "自动触发"
+url = env.get("REPORT_URL", "")
+package_build = env.get("PACKAGE_BUILD", "")
+source_commit = env.get("SOURCE_COMMIT", "")
+lines = [f"**audioTranslation | {title}**", f"构建 #{number} · 发起人 {requester}"]
+if re.fullmatch(r"[1-9][0-9]*", package_build):
+    lines.append(f"打包任务 #{package_build}")
+if re.fullmatch(r"[a-f0-9]{40}", source_commit):
+    lines.append(f"源码提交 `{source_commit[:12]}`")
+if re.fullmatch(r"https?://[a-zA-Z0-9.:/_%-]+", url):
+    lines.append(f"[查看 Jenkins 日志]({url}console)")
+print("\\n\\n".join(lines))
+PY
+'''
+            }
+        }
+    }
+}

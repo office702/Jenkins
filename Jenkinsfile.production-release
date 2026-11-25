@@ -1,3 +1,16 @@
+def notifyProduction(String status) {
+    catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS', catchInterruptions: false,
+               message: 'Could not queue the WeCom production notification.') {
+        build job: '/audioTranslation-wecom-notify', wait: false, quietPeriod: 0, parameters: [
+            string(name: 'EVENT', value: 'production_' + status),
+            string(name: 'REPORT_BUILD', value: env.BUILD_NUMBER),
+            string(name: 'REPORT_URL', value: env.BUILD_URL ?: ''),
+            string(name: 'REQUESTED_BY', value: env.RELEASE_REQUESTED_BY ?: 'automation'),
+            string(name: 'PACKAGE_BUILD', value: env.PACKAGE_BUILD_NUMBER ?: '')
+        ]
+    }
+}
+
 pipeline {
     agent none
 
@@ -93,6 +106,13 @@ PY
                 cleanup {
                     deleteDir()
                 }
+            }
+        }
+    }
+    post {
+        cleanup {
+            script {
+                notifyProduction(currentBuild.currentResult)
             }
         }
     }
