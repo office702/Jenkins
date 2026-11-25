@@ -1,0 +1,45 @@
+pipeline {
+    agent none
+
+    options {
+        skipDefaultCheckout(true)
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '25'))
+        timeout(time: 85, unit: 'MINUTES')
+    }
+
+    stages {
+        stage('Build and archive packages') {
+            steps {
+                script {
+                    def buildCause = currentBuild.getBuildCauses().find { it.userId }
+                    env.TEST_REQUESTED_BY = buildCause?.userId ?: 'automation'
+                    def packages = build job: '/packaging/audioTranslation', wait: true, propagate: true
+                    env.PACKAGE_BUILD_NUMBER = packages.number.toString()
+                    currentBuild.description = 'Mac mini test server - package #' + env.PACKAGE_BUILD_NUMBER
+                }
+            }
+        }
+        stage('Deploy and verify test server') {
+            agent { label 'audio-mac-docker' }
+            steps {
+                deleteDir()
+                copyArtifacts projectName: '/packaging/audioTranslation',
+                    selector: specific(env.PACKAGE_BUILD_NUMBER),
+                    filter: 'artifacts/docker/*.tar.gz,artifacts/docker/*.tar.gz.sha256,artifacts/docker/build.json',
+                    fingerprintArtifacts: false
+                sh '''#!/bin/bash
+set -euo pipefail
+deploy="$HOME/Library/Application Support/Jenkins/audio-translation-test/deploy-test.sh"
+bash "$deploy" "$WORKSPACE/artifacts/docker" "$WORKSPACE/deployment.json"
+'''
+                archiveArtifacts artifacts: 'deployment.json', fingerprint: true
+            }
+            post {
+                cleanup {
+                    deleteDir()
+                }
+            }
+        }
+    }
+}
