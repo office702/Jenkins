@@ -20,6 +20,7 @@ def notifyPackaging(String status) {
             string(name: 'REPORT_BUILD', value: env.BUILD_NUMBER),
             string(name: 'REPORT_URL', value: env.BUILD_URL ?: ''),
             string(name: 'REQUESTED_BY', value: env.PACKAGE_REQUESTED_BY ?: 'automation'),
+            string(name: 'TRIGGER_JOB', value: env.PACKAGE_TRIGGER_JOB ?: ''),
             string(name: 'SOURCE_COMMIT', value: env.PACKAGE_COMMIT ?: '')
         ]
     }
@@ -54,7 +55,9 @@ pipeline {
                 script {
                     env.PACKAGE_REQUESTED_BY = 'automation'
                     catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS', catchInterruptions: false,
-                               message: 'Could not resolve the packaging requester.') {
+                               message: 'Could not resolve the packaging trigger.') {
+                        def upstreamCause = currentBuild.getBuildCauses().find { it.upstreamProject }
+                        env.PACKAGE_TRIGGER_JOB = upstreamCause?.upstreamProject ?: ''
                         env.PACKAGE_REQUESTED_BY = findRequester(currentBuild) ?: 'automation'
                     }
                     notifyPackaging('STARTED')

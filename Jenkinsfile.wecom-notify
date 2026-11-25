@@ -12,6 +12,7 @@ pipeline {
         string(name: 'REPORT_BUILD')
         string(name: 'REPORT_URL')
         string(name: 'REQUESTED_BY')
+        string(name: 'TRIGGER_JOB')
         string(name: 'PACKAGE_BUILD')
         string(name: 'SOURCE_COMMIT')
     }
@@ -43,7 +44,8 @@ titles = {
     "production_UNSTABLE": "正式服发布有异常",
     "production_ABORTED": "正式服发布已中止",
 }
-title = titles[env["EVENT"]]
+event = env["EVENT"]
+title = titles[event]
 number = env["REPORT_BUILD"]
 assert re.fullmatch(r"[1-9][0-9]*", number)
 requester = re.sub(r"[^\\w@. -]", "", env.get("REQUESTED_BY", ""))[:80] or "automation"
@@ -52,7 +54,15 @@ if requester == "automation":
 url = env.get("REPORT_URL", "")
 package_build = env.get("PACKAGE_BUILD", "")
 source_commit = env.get("SOURCE_COMMIT", "")
-lines = [f"**audioTranslation | {title}**", f"构建 #{number} · 发起人 {requester}"]
+lines = [f"**audioTranslation | {title}**"]
+if event.startswith("package_"):
+    sources = {
+        "packaging/audioTranslation-test": "测试服触发",
+        "production/audioTranslation-release": "正式服触发",
+    }
+    source = sources.get(env.get("TRIGGER_JOB", ""), "共用打包归档")
+    lines.append(f"来源 {source}")
+lines.append(f"构建 #{number} · 发起人 {requester}")
 if re.fullmatch(r"[1-9][0-9]*", package_build):
     lines.append(f"打包任务 #{package_build}")
 if re.fullmatch(r"[a-f0-9]{40}", source_commit):
