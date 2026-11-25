@@ -8,14 +8,27 @@ pipeline {
         timeout(time: 85, unit: 'MINUTES')
     }
 
+    parameters {
+        string(name: 'DOCKER_PACKAGE_BUILD', defaultValue: '', trim: true,
+               description: 'Optional shared build number whose archived Docker image will be verified and deployed to the test server.')
+    }
+
     stages {
-        stage('Build and archive packages') {
+        stage('Select or build Docker image') {
             steps {
                 script {
                     def buildCause = currentBuild.getBuildCauses().find { it.userId }
                     env.TEST_REQUESTED_BY = buildCause?.userId ?: 'automation'
-                    def packages = build job: '/packaging/audioTranslation', wait: true, propagate: true
-                    env.PACKAGE_BUILD_NUMBER = packages.number.toString()
+                    if (params.DOCKER_PACKAGE_BUILD) {
+                        if (!(params.DOCKER_PACKAGE_BUILD ==~ /[1-9][0-9]*/)) {
+                            error('Enter a positive shared build number.')
+                        }
+                        env.PACKAGE_BUILD_NUMBER = params.DOCKER_PACKAGE_BUILD
+                    } else {
+                        def packaged = build job: '/packaging/audioTranslation', wait: true, propagate: true,
+                            parameters: [booleanParam(name: 'DOCKER_ONLY', value: true)]
+                        env.PACKAGE_BUILD_NUMBER = packaged.number.toString()
+                    }
                     currentBuild.description = 'Mac mini 8020 test server - package #' + env.PACKAGE_BUILD_NUMBER
                 }
             }

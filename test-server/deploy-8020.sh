@@ -1,5 +1,6 @@
 #!/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
+trap 'echo "deploy-8020.sh failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 umask 077
 
 root=$(cd "$(dirname "$0")" && pwd -P)

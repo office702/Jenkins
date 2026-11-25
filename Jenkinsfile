@@ -33,8 +33,13 @@ pipeline {
         skipDefaultCheckout(true)
         disableConcurrentBuilds()
         copyArtifactPermission('audioTranslation-test,../production/audioTranslation-stage,../production/audioTranslation-release')
-        buildDiscarder(logRotator(numToKeepStr: '25', artifactNumToKeepStr: '3'))
+        buildDiscarder(logRotator(numToKeepStr: '25', artifactNumToKeepStr: '10'))
         timeout(time: 75, unit: 'MINUTES')
+    }
+
+    parameters {
+        booleanParam(name: 'DOCKER_ONLY', defaultValue: false,
+                     description: 'Build and archive the server Docker image only.')
     }
 
     environment {
@@ -95,6 +100,13 @@ pipeline {
             post {
                 unsuccessful {
                     deleteDir()
+                }
+                success {
+                    script {
+                        if (params.DOCKER_ONLY) {
+                            deleteDir()
+                        }
+                    }
                 }
             }
         }
@@ -179,6 +191,10 @@ PY
                     }
                 }
                 stage('Windows NetTap Upgrade') {
+                    when {
+                        beforeAgent true
+                        expression { !params.DOCKER_ONLY }
+                    }
                     agent { label 'audio-windows' }
                     steps {
                         powershell '''
